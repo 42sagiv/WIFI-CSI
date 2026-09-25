@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CSI Radar — WiFi Motion Sensing</title>
+<style>
+  :root {
+    --bg: #05100a;
+    --sweep: #39ff8f;
+    --grid: #123322;
+    --grid-strong: #1d4a30;
+    --blip: #7dffb0;
+    --blip-strong: #ffffff;
+    --text: #8ff5b8;
+    --text-dim: #3f7857;
+    --panel-bg: rgba(6, 24, 15, 0.85);
+    --danger: #ff5a5a;
+    --ok: #39ff8f;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Mono', 'Courier New', monospace;
+    overflow: hidden;
+  }
+  #app {
+    display: flex; flex-direction: column;
+    height: 100%; width: 100%;
+  }
+  header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--grid-strong);
+    flex-shrink: 0;
+  }
+  header h1 {
+    font-size: 14px; letter-spacing: 3px; margin: 0;
+    font-weight: 600; text-transform: uppercase;
+  }
+  header h1 span { color: var(--sweep); }
+  #status {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; letter-spacing: 1px;
+  }
+  #status-dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--danger);
+    box-shadow: 0 0 8px var(--danger);
+    transition: background 0.3s, box-shadow 0.3s;
+  }
+  #status-dot.live { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+
+  #main { flex: 1; display: flex; min-height: 0; }
+  #radar-wrap {
+    flex: 1; position: relative;
+    display: flex; align-items: center; justify-content: center;
+    min-width: 0;
+  }
+  canvas { display: block; }
+
+  #side {
+    width: 260px; flex-shrink: 0;
+    border-left: 1px solid var(--grid-strong);
+    padding: 16px;
+    display: flex; flex-direction: column; gap: 16px;
+    overflow-y: auto;
+  }
+  .panel {
+    background: var(--panel-bg);
+    border: 1px solid var(--grid-strong);
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+  .panel h2 {
+    font-size: 10px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--text-dim); margin: 0 0 8px 0;
+  }
+  .metric { display: flex; justify-content: space-between; font-size: 12px; margin: 4px 0; }
+  .metric b { color: var(--sweep); font-weight: 600; }
+  #score-bar-wrap {
+    width: 100%; height: 8px; background: var(--grid);
+    border-radius: 4px; overflow: hidden; margin-top: 6px;
+  }
+  #score-bar {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, var(--ok), var(--danger));
+    transition: width 0.15s ease-out;
+  }
+  #log {
+    font-size: 11px; line-height: 1.6;
+    max-height: 220px; overflow-y: auto;
+    display: flex; flex-direction: column-reverse;
+  }
+  #log div.motion { color: var(--danger); }
+  #log div.idle { color: var(--text-dim); }
+
+  .controls { display: flex; flex-direction: column; gap: 8px; }
+  .controls label { font-size: 10px; letter-spacing: 1px; color: var(--text-dim); }
+  .controls input[type="text"], .controls input[type="number"] {
+    background: var(--bg); border: 1px solid var(--grid-strong);
+    color: var(--text); padding: 6px 8px; font-family: inherit;
+    font-size: 12px; border-radius: 4px; width: 100%;
+  }
+  .btn-row { display: flex; gap: 8px; }
+  button {
+    flex: 1; background: var(--grid); color: var(--text);
+    border: 1px solid var(--grid-strong); border-radius: 4px;
+    padding: 7px 10px; font-family: inherit; font-size: 11px;
+    letter-spacing: 1px; cursor: pointer; text-transform: uppercase;
+  }
+  button:hover { background: var(--grid-strong); }
+  button.active { background: var(--sweep); color: #05100a; font-weight: 700; }
+
+  #footnote {
+    font-size: 10px; color: var(--text-dim); line-height: 1.5;
+    padding-top: 4px; border-top: 1px solid var(--grid-strong);
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>CSI <span>RADAR</span> — WiFi Motion Sensing</h1>
+    <div id="status">
+      <div id="status-dot"></div>
+      <span id="status-text">DEMO MODE</span>
+    </div>
+  </header>
+
+  <div id="main">
+    <div id="radar-wrap">
+      <canvas id="radar"></canvas>
+    </div>
+
+    <div id="side">
+      <div class="panel controls">
+        <h2>Connection</h2>
+        <label for="ws-url">WebSocket URL (from --ws-port)</label>
+        <input type="text" id="ws-url" value="ws://localhost:5600" />
+        <div class="btn-row">
+          <button id="btn-connect">Connect</button>
+          <button id="btn-demo" class="active">Demo</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Live Reading</h2>
+        <div class="metric"><span>Score</span><b id="m-score">0.00</b></div>
+        <div id="score-bar-wrap"><div id="score-bar"></div></div>
+        <div class="metric"><span>Threshold</span><b id="m-threshold">3.00</b></div>
+        <div class="metric"><span>State</span><b id="m-state">IDLE</b></div>
+        <div class="metric"><span>Frames</span><b id="m-frames">0</b></div>
+      </div>
+
+      <div class="panel controls">
+        <h2>Radar Settings</h2>
+        <label for="decay">Blip persistence (sec)</label>
+        <input type="number" id="decay" value="4" min="1" max="20" step="1" />
+        <label for="threshold-in">Motion threshold (display only)</label>
+        <input type="number" id="threshold-in" value="3.0" min="0.5" max="10" step="0.1" />
+      </div>
+
+      <div class="panel">
+        <h2>Event Log</h2>
+        <div id="log"></div>
+      </div>
+
+      <div id="footnote">
+        Angle is a derived, illustrative value (subcarrier energy balance) — not a real angle-of-arrival measurement. A single omnidirectional antenna can't localize direction; range rings represent relative signal deviation, not physical distance.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const canvas = document.getElementById('radar');
+  const ctx = canvas.getContext('2d');
+  const wrap = document.getElementById('radar-wrap');
+
+  let W = 0, H = 0, cx = 0, cy = 0, R = 0;
+
+  function resize() {
+    W = wrap.clientWidth;
+    H = wrap.clientHeight;
+    const size = Math.min(W, H) - 20;
+    canvas.width = size * devicePixelRatio;
+    canvas.height = size * devicePixelRatio;
+    canvas.style.width = size + 'px';
+    canvas.style.height = size + 'px';
+    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    cx = size / 2; cy = size / 2; R = size / 2 - 10;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // --- State ---------------------------------------------------------
+  let sweepAngle = 0;
+  let blips = []; // {angle, dist, strength, born}
+  let frameCount = 0;
+  let currentScore = 0;
+  let threshold = 3.0;
+  let ws = null;
+  let demoMode = true;
+  let demoTimer = null;
+  const logEl = document.getElementById('log');
+  const statusDot = document.getElementById('status-dot');
+  const statusText = document.getElementById('status-text');
+
+  function logEvent(text, cls) {
+    const div = document.createElement('div');
+    div.className = cls;
+    const t = new Date().toLocaleTimeString();
+    div.textContent = `[${t}] ${text}`;
+    logEl.prepend(div);
+    while (logEl.children.length > 60) logEl.removeChild(logEl.lastChild);
+  }
+
+  function setConnected(live) {
+    statusDot.classList.toggle('live', live);
+    statusText.textContent = live ? 'LIVE' : (demoMode ? 'DEMO MODE' : 'DISCONNECTED');
+  }
+
+  // --- Handling one reading (real or simulated) -----------------------
+  function handleReading(msg) {
+    frameCount++;
+    currentScore = msg.score;
+    document.getElementById('m-frames').textContent = frameCount;
+    document.getElementById('m-score').textContent = currentScore.toFixed(2);
+    document.getElementById('m-state').textContent = msg.motion ? 'MOTION' : 'IDLE';
+    document.getElementById('m-state').style.color = msg.motion ? 'var(--danger)' : 'var(--ok)';
+
+    const pct = Math.max(0, Math.min(100, (currentScore / (threshold * 2)) * 100));
+    document.getElementById('score-bar').style.width = pct + '%';
+
+    if (msg.motion) {
+      const angleRad = (msg.angle || Math.random() * 360) * Math.PI / 180;
+      const dist = Math.min(0.95, 0.3 + Math.random() * 0.6);
+      blips.push({
+        angle: angleRad,
+        dist: dist,
+        strength: Math.min(1, currentScore / (threshold * 2)),
+        born: performance.now(),
+      });
+      logEvent(`MOTION  score=${currentScore.toFixed(2)}`, 'motion');
+    }
+  }
+
+  // --- WebSocket connect ------------------------------------------------
+  function connect(url) {
+    try {
+      ws = new WebSocket(url);
+    } catch (e) {
+      logEvent('Invalid WebSocket URL', 'motion');
+      return;
+    }
+    ws.onopen = () => { demoMode = false; stopDemo(); setConnected(true); logEvent('Connected to ' + url, 'idle'); };
+    ws.onclose = () => { setConnected(false); logEvent('Disconnected', 'motion'); };
+    ws.onerror = () => { setConnected(false); };
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        handleReading(msg);
+      } catch (e) { /* ignore malformed */ }
+    };
+  }
+
+  document.getElementById('btn-connect').addEventListener('click', () => {
+    const url = document.getElementById('ws-url').value.trim();
+    if (!url) return;
+    document.getElementById('btn-connect').classList.add('active');
+    document.getElementById('btn-demo').classList.remove('active');
+    if (ws) { ws.close(); }
+    connect(url);
+  });
+
+  document.getElementById('btn-demo').addEventListener('click', () => {
+    if (ws) { ws.close(); ws = null; }
+    demoMode = true;
+    document.getElementById('btn-demo').classList.add('active');
+    document.getElementById('btn-connect').classList.remove('active');
+    setConnected(false);
+    startDemo();
+  });
+
+  document.getElementById('threshold-in').addEventListener('input', (e) => {
+    threshold = parseFloat(e.target.value) || 3.0;
+    document.getElementById('m-threshold').textContent = threshold.toFixed(2);
+  });
+
+  // --- Demo data generator (no hardware needed) -----------------------
+  function startDemo() {
+    stopDemo();
+    demoTimer = setInterval(() => {
+      const baseline = Math.random() * 1.2;
+      const spike = Math.random() < 0.06;
+      const score = spike ? threshold + Math.random() * 4 : baseline;
+      handleReading({
+        score: score,
+        motion: score > threshold,
+        angle: Math.random() * 360,
+      });
+    }, 120);
+  }
+  function stopDemo() {
+    if (demoTimer) { clearInterval(demoTimer); demoTimer = null; }
+  }
+  startDemo();
+
+  // --- Render loop -------------------------------------------------------
+  function draw(now) {
+    ctx.clearRect(0, 0, W, H);
+
+    // range rings
+    ctx.strokeStyle = getCss('--grid');
+    ctx.lineWidth = 1;
+    for (let i = 1; i <= 4; i++) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, (R * i) / 4, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // crosshairs
+    ctx.strokeStyle = getCss('--grid-strong');
+    ctx.beginPath();
+    ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy);
+    ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R);
+    ctx.stroke();
+
+    // degree ticks
+    ctx.fillStyle = getCss('--text-dim');
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    [0, 90, 180, 270].forEach(deg => {
+      const rad = (deg - 90) * Math.PI / 180;
+      const lx = cx + Math.cos(rad) * (R + 12);
+      const ly = cy + Math.sin(rad) * (R + 12) + 3;
+      ctx.fillText(deg + '°', lx, ly);
+    });
+
+    // sweep gradient wedge
+    const sweepRad = sweepAngle * Math.PI / 180;
+    const grad = ctx.createConicGradient
+      ? ctx.createConicGradient(sweepRad - Math.PI / 2, cx, cy)
+      : null;
+    if (grad) {
+      grad.addColorStop(0, 'rgba(57,255,143,0.35)');
+      grad.addColorStop(0.06, 'rgba(57,255,143,0.0)');
+      grad.addColorStop(1, 'rgba(57,255,143,0.0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // sweep line
+    ctx.strokeStyle = getCss('--sweep');
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(sweepRad) * R, cy + Math.sin(sweepRad) * R);
+    ctx.stroke();
+
+    sweepAngle = (sweepAngle + 1.6) % 360;
+
+    // blips
+    const decaySec = parseFloat(document.getElementById('decay').value) || 4;
+    blips = blips.filter(b => (now - b.born) / 1000 < decaySec);
+    blips.forEach(b => {
+      const age = (now - b.born) / 1000;
+      const fade = 1 - age / decaySec;
+      const bx = cx + Math.cos(b.angle) * b.dist * R;
+      const by = cy + Math.sin(b.angle) * b.dist * R;
+      const radius = 4 + b.strength * 6;
+      const alpha = Math.max(0, fade);
+      ctx.beginPath();
+      ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+      ctx.arc(bx, by, radius * 0.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.strokeStyle = `rgba(125,255,176,${alpha * 0.6})`;
+      ctx.lineWidth = 2;
+      ctx.arc(bx, by, radius + (1 - fade) * 18, 0, Math.PI * 2);
+      ctx.stroke();
+    });
+
+    // center dot (sensor position)
+    ctx.beginPath();
+    ctx.fillStyle = getCss('--sweep');
+    ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    requestAnimationFrame(draw);
+  }
+
+  function getCss(varName) {
+    return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+  }
+
+  requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>

@@ -75,3 +75,4 @@ Note: the GUI's "angle" is a derived value (relative subcarrier energy balance),
 
 CSI-based sensing works within the WiFi link's multipath environment — practically, indoor ranges of 10–20m with reflective surfaces (walls, furniture) to work with. It does not extend outdoors and cannot, on its own, classify *what* moved (person vs. pet vs. object) without further signal processing.
 # WIFI-CSI
+# WIFI-CSI
